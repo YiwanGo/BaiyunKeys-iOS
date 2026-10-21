@@ -12,6 +12,8 @@ struct ConfigView: View {
     @State private var phone = ""
     @State private var idCard = ""
     @State private var openIdInput = ""
+    @State private var smPublicKeyInput = ""
+    @State private var smPrivateKeyInput = ""
     @State private var fetching = false
     @State private var toast: Toast?
     @State private var confirmingClearAll = false
@@ -181,7 +183,7 @@ struct ConfigView: View {
             CardHeader(title: "自动获取配置", subtitle: "从官方拉取已授权门禁", symbol: "antenna.radiowaves.left.and.right", tint: Theme.info)
 
             PrefMenuRow(title: "方式",
-                        subtitle: store.fetchMethod == .openid ? "免身份证，需本人 OpenID" : "需要本人身份证号",
+                        subtitle: fetchMethodSubtitle,
                         current: store.fetchMethod.pickerLabel) {
                 Picker("方式", selection: $store.fetchMethod) {
                     ForEach(AppStore.FetchMethod.allCases) { method in
@@ -205,6 +207,14 @@ struct ConfigView: View {
                     Text("手机号会用官方 RSA 公钥加密后，连同本人微信 OpenID 一起发去官方换取门禁参数。OpenID 是账号身份标识，需自行获取一次，本机会记住免得重填。")
                         .font(.system(size: 12))
                         .foregroundStyle(Theme.textSecondary)
+
+                case .openid_sm2:
+                    FlatField(title: "微信 OpenID", placeholder: "请输入本人的微信 OpenID", text: $openIdInput)
+                    FlatField(title: "SM2 公钥", placeholder: "04 开头，130 字符 hex", text: $smPublicKeyInput, monospaced: true)
+                    FlatField(title: "SM2 私钥", placeholder: "64 字符 hex", text: $smPrivateKeyInput, monospaced: true)
+                    Text("把本地生成的 SM2 公钥告诉服务器，之后服务器返回的每把门禁 key 都用这个公钥加密，本机用对应 SM2 私钥解回明文。公/私钥都存在本机，私钥等同实体钥匙，请妥善保管。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.textSecondary)
                 }
             }
 
@@ -218,16 +228,27 @@ struct ConfigView: View {
             }
         }
         .onAppear {
-            // 首次进入时把本机记住的 OpenID 回填到输入框
+            // 首次进入时把本机记住的 OpenID / SM2 公/私钥回填到输入框
             if openIdInput.isEmpty { openIdInput = store.openId }
+            if smPublicKeyInput.isEmpty { smPublicKeyInput = store.smPublicKey }
+            if smPrivateKeyInput.isEmpty { smPrivateKeyInput = store.smPrivateKey }
+        }
+    }
+
+    private var fetchMethodSubtitle: String {
+        switch store.fetchMethod {
+        case .idcard:     return "需要本人身份证号"
+        case .openid:     return "免身份证，需本人 OpenID"
+        case .openid_sm2: return "加密下发，需本人 OpenID + SM2 公/私钥"
         }
     }
 
     private var canFetch: Bool {
-        guard phone.count >= 11 else { return false }
         switch store.fetchMethod {
-        case .idcard:  return idCard.count >= 15
-        case .openid:  return openIdInput.trimmingCharacters(in: .whitespaces).count >= 8
+        // 加密版不传 xx 字段服务器就不加密下发,等效 openid 方式,用不上,按钮置灰
+        case .openid_sm2: return false
+        case .idcard:     return phone.count >= 11 && idCard.count >= 15
+        case .openid:     return phone.count >= 11 && openIdInput.trimmingCharacters(in: .whitespaces).count >= 8
         }
     }
 
@@ -246,6 +267,18 @@ struct ConfigView: View {
                 let normalized = openIdInput.trimmingCharacters(in: .whitespaces)
                 entrances = try await BaiyunAPI.entranceGuards(byPhone: phone, openId: normalized)
                 store.openId = normalized   // 成功一次后本机记住，下次免重填
+
+            case .openid_sm2:
+                let normalizedOpenId = openIdInput.trimmingCharacters(in: .whitespaces)
+                let pub  = smPublicKeyInput.trimmingCharacters(in: .whitespaces)
+                let priv = smPrivateKeyInput.trimmingCharacters(in: .whitespaces)
+                entrances = try await Activation.fetchDecryptedGuards(
+                    phone: phone, openId: normalizedOpenId,
+                    smPublicKey: pub, smPrivateKey: priv
+                )
+                store.openId = normalizedOpenId
+                store.smPublicKey = pub
+                store.smPrivateKey = priv
             }
 
             guard !entrances.isEmpty else {

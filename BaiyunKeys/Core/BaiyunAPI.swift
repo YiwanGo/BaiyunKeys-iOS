@@ -25,6 +25,25 @@ enum BaiyunAPI {
         }
     }
 
+    /// 新接口激活握手的返回。
+    struct GoHomeLoginResult {
+        /// 服务器返的新 login_token。
+        let newLoginToken: String
+        /// 服务器带回的用户基本信息（可选用来显示 / 校验）。
+        let phone: String
+        let name: String
+        let idCard: String
+    }
+
+    /// 加密版门禁列表项，encryptedKey 需要用对应 SM2 私钥解完才是明文。
+    struct EncryptedEntrance {
+        let name: String
+        let mac: String
+        let bluetoothName: String
+        /// 服务器用你送上去的 SM2 公钥加密后的门禁 key（112 字节 hex，C1C3C2 结构）。
+        let encryptedKey: String
+    }
+
     enum Failure: LocalizedError {
         case http(Int)
         case decode
@@ -149,6 +168,108 @@ enum BaiyunAPI {
         }
         let dataList = (first["data_list"] as? [[String: Any]]) ?? []
         return mapGuards(dataList)
+    }
+
+    // MARK: - 新接口：加密版（手机号 + OpenID + 本地 SM2 密钥对）
+
+    /// 用 openId 换 `cloud_shield_token`。独立抽出来，激活流程和老 OpenID 路线都能复用。
+    static func checkState(openId: String) async throws -> String {
+        let resp = try await requestArray(
+            path: "/mini_program/api_01/check_state",
+            body: ["openId": openId.trimmingCharacters(in: .whitespaces),
+                   "oper_type": "INDEX"],
+            base: baseURLXcx
+        )
+        guard let token = string(resp.first?["access_token"]).nonEmpty else {
+            throw Failure.server(string(resp.first?["resp_msg"]).nonEmpty
+                                 ?? "OpenID 换取令牌失败，请确认 OpenID 正确且未过期")
+        }
+        return token
+    }
+
+    /// 新接口激活握手。把本地 SM2 公钥告诉服务器;后续 get_guard_list_by_phone 若
+    /// 加密下发 productKey,就是用这把公钥加密的。
+    static func goHomeServiceLogin(openId: String,
+                                   loginToken: String,
+                                   smPublicKey: String,
+                                   accessToken: String) async throws -> GoHomeLoginResult {
+        let resp = try await requestArray(
+            path: "/p_021_health_passport/api_007_wbyw_002/go_home_service_login",
+            body: [
+                "openId": openId.trimmingCharacters(in: .whitespaces),
+                "login_token": loginToken,
+                "sm_publickey": smPublicKey.trimmingCharacters(in: .whitespaces),
+            ],
+            headers: ["cloud_shield_token": accessToken],
+            base: baseURLXcx
+        )
+        let first = resp.first ?? [:]
+        if let code = first["resp_code"] as? String, code != "000000000000" {
+            throw Failure.server(string(first["resp_msg"]).nonEmpty ?? "激活握手失败")
+        }
+        return GoHomeLoginResult(
+            newLoginToken: string(first["token"]),
+            phone: string(first["phone"]),
+            name: string(first["name"]),
+            idCard: string(first["id_card"])
+        )
+    }
+
+    /// 拉取门禁列表。payload 不带 xx 字段时服务器直接返明文 productKey,带了才会用
+    /// sm_publickey 做 SM2 加密下发;目前只传 phone,走明文分支。
+    static func encryptedEntranceGuards(phone: String,
+                                        accessToken: String) async throws -> [EncryptedEntrance] {
+        // ① RSA 公钥
+        let rsaResp = try await requestArray(
+            path: "/health_passport/api_001_health_passport/get_rsa_public_key",
+            method: "GET",
+            headers: ["cloud_shield_token": accessToken],
+            base: baseURLXcx
+        )
+        guard let publicKey = string(rsaResp.first?["result"]).nonEmpty else {
+            throw Failure.server(string(rsaResp.first?["resp_msg"]).nonEmpty ?? "获取 RSA 公钥失败")
+        }
+
+        // ② 手机号 RSA 加密后换门禁列表
+        let normalizedPhone = phone.trimmingCharacters(in: .whitespaces)
+        let plaintext = "{\"phone\":\"\(normalizedPhone)\"}"
+        let encryptedKey = try RSA.encrypt(plaintext, pem: publicKey)
+        let listResp = try await requestArray(
+            path: "/p_021_health_passport/api_007_wbyw_002/get_guard_list_by_phone",
+            body: ["key": encryptedKey],
+            headers: ["cloud_shield_token": accessToken],
+            base: baseURLXcx
+        )
+        let first = listResp.first ?? [:]
+        if let code = first["resp_code"] as? String, code != "000000000000" {
+            throw Failure.server(string(first["resp_msg"]).nonEmpty ?? "获取门禁列表失败")
+        }
+        let dataList = (first["data_list"] as? [[String: Any]]) ?? []
+        return mapEncryptedGuards(dataList)
+    }
+
+    /// 不做 isValidKey 过滤，保留 112 字节 hex 密文。
+    private static func mapEncryptedGuards(_ list: [[String: Any]]) -> [EncryptedEntrance] {
+        list.compactMap { item in
+            let bluetoothName = string(item["bluetoothName"]).uppercased()
+
+            let rawMac = string(item["macNum"]).nonEmpty ?? string(item["mac"]).nonEmpty ?? ""
+            var mac = Hex.formatMac(rawMac)
+            if !Hex.isValidMac(mac), !bluetoothName.isEmpty,
+               let derived = BLEProtocol.macFromBluetoothName(bluetoothName) {
+                mac = derived
+            }
+
+            let encrypted = string(item["productKey"]).nonEmpty
+                         ?? string(item["key"]).nonEmpty
+                         ?? ""
+
+            guard !mac.isEmpty, !encrypted.isEmpty else { return nil }
+            let name = [string(item["address"]), string(item["name"]), string(item["doorName"])]
+                .first { !$0.isEmpty } ?? "导入门禁"
+            return EncryptedEntrance(name: name, mac: mac, bluetoothName: bluetoothName,
+                                      encryptedKey: encrypted)
+        }
     }
 
     // MARK: - 内部：请求

@@ -16,6 +16,8 @@ final class AppStore {
         static let showAutoFetchAt = "showAutoFetchAt"
         static let fetchMethod = "fetchMethod"
         static let openId = "openId"
+        static let smPublicKey = "smPublicKey"
+        static let smPrivateKey = "smPrivateKey"
         static let theme = "theme"
         static let history = "unlockHistory"
         static let saveHistory = "saveHistory"
@@ -60,18 +62,21 @@ final class AppStore {
     /// 「自动获取配置」显示状态的最长保留时间，超过则自动翻回隐藏。
     static let autoFetchTTL: TimeInterval = 24 * 60 * 60
 
-    /// 「自动获取配置」的两种通道。
+    /// 「自动获取配置」的三种通道。
     enum FetchMethod: String, CaseIterable, Identifiable {
-        /// 老接口：手机号 + 身份证号。
+        /// 老接口：手机号 + 身份证号。目前官方端已停用。
         case idcard
-        /// 新接口：手机号 + 微信 OpenID（免身份证，走 xcx.pinganbaiyun.cn）。
+        /// 手机号 + 微信 OpenID（免身份证，走 xcx.pinganbaiyun.cn）。
         case openid
+        /// 手机号 + OpenID + 本地 SM2 密钥对（服务器加密下发，本机用私钥解）。
+        case openid_sm2
 
         var id: String { rawValue }
         var pickerLabel: String {
             switch self {
-            case .idcard: return "手机号 + 身份证"
-            case .openid: return "手机号 + OpenID（免身份证）"
+            case .idcard:     return "手机号 + 身份证（接口失效）"
+            case .openid:     return "手机号 + OpenID（免身份证）"
+            case .openid_sm2: return "手机号 + OpenID + SM2（加密版）"
             }
         }
     }
@@ -166,12 +171,12 @@ final class AppStore {
         return true
     }
 
-    /// 自动获取配置的方式：身份证号 / 微信 OpenID。默认走老的身份证通道。
+    /// 自动获取配置的方式；默认 OpenID（身份证通道已停用）。
     var fetchMethod: FetchMethod {
         get {
             access(keyPath: \.fetchMethod)
-            let raw = defaults.string(forKey: Keys.fetchMethod) ?? FetchMethod.idcard.rawValue
-            return FetchMethod(rawValue: raw) ?? .idcard
+            let raw = defaults.string(forKey: Keys.fetchMethod) ?? FetchMethod.openid.rawValue
+            return FetchMethod(rawValue: raw) ?? .openid
         }
         set { withMutation(keyPath: \.fetchMethod) { defaults.set(newValue.rawValue, forKey: Keys.fetchMethod) } }
     }
@@ -182,6 +187,26 @@ final class AppStore {
         set {
             withMutation(keyPath: \.openId) {
                 defaults.set(newValue.trimmingCharacters(in: .whitespaces), forKey: Keys.openId)
+            }
+        }
+    }
+
+    /// 加密版通道用的本地 SM2 公钥（hex，130 字符，04 开头）；本地记住。
+    var smPublicKey: String {
+        get { access(keyPath: \.smPublicKey); return defaults.string(forKey: Keys.smPublicKey) ?? "" }
+        set {
+            withMutation(keyPath: \.smPublicKey) {
+                defaults.set(newValue.trimmingCharacters(in: .whitespaces), forKey: Keys.smPublicKey)
+            }
+        }
+    }
+
+    /// 加密版通道用的本地 SM2 私钥（hex，64 字符）；本地记住，等同实体钥匙。
+    var smPrivateKey: String {
+        get { access(keyPath: \.smPrivateKey); return defaults.string(forKey: Keys.smPrivateKey) ?? "" }
+        set {
+            withMutation(keyPath: \.smPrivateKey) {
+                defaults.set(newValue.trimmingCharacters(in: .whitespaces), forKey: Keys.smPrivateKey)
             }
         }
     }

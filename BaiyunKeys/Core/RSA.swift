@@ -29,7 +29,8 @@ enum RSA {
     /// 分块大小：30 字节。
     static let chunkSize = 30
 
-    /// 用给定 PEM 公钥加密字符串，返回 `hex(cipher1)+hex(cipher2)+...+RSA_STRTOK@@@`。
+    /// 用给定 PEM 公钥加密字符串，返回 `hex(cipher1)+SUFFIX+hex(cipher2)+SUFFIX+...`。
+    /// 每块后面都要加分隔符,服务器用它分块解密;只在末尾加一个会导致多块时解析错。
     static func encrypt(_ plaintext: String, pem: String) throws -> String {
         let key = try importPublicKey(pem: pem)
         let bytes = Array(plaintext.utf8)
@@ -40,9 +41,10 @@ enum RSA {
             let end = min(index + chunkSize, bytes.count)
             let cipher = try encryptBlock(Array(bytes[index..<end]), key: key)
             hex += Hex.string(cipher)
+            hex += suffix
             index = end
         }
-        return hex + suffix
+        return hex
     }
 
     // MARK: - 内部

@@ -13,6 +13,26 @@ struct BaiyunKeysApp: App {
         appearance.configureWithDefaultBackground()
         UITabBar.appearance().standardAppearance = appearance
         UITabBar.appearance().scrollEdgeAppearance = appearance
+
+        // 「自动获取 · 加密版」用到的 SM2 解密。调用的 SM2 实现在 Core/SM2.swift,
+        // 这里把它包装成 Activation 约定的签名,支持 C1C3C2 + 带或不带 04 前缀两种格式。
+        Sm2DecryptHook.decrypt = { cipherHex, privateKeyHex in
+            let trimmed = cipherHex.trimmingCharacters(in: .whitespaces)
+            let variants = trimmed.lowercased().hasPrefix("04")
+                ? [trimmed, String(trimmed.dropFirst(2))]
+                : [trimmed, "04" + trimmed]
+            for variant in variants {
+                let out = SM2.doDecrypt(variant, privateKey: privateKeyHex,
+                                         cipherMode: 1, output: "array")
+                if let bytes = out as? [UInt8], !bytes.isEmpty {
+                    return bytes.map { String(format: "%02x", $0) }.joined()
+                }
+            }
+            struct Sm2DecryptError: LocalizedError {
+                var errorDescription: String? { "SM2 解密失败" }
+            }
+            throw Sm2DecryptError()
+        }
     }
 
     var body: some Scene {
