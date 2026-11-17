@@ -6,6 +6,11 @@
 
 > 安卓用户请使用 Edge 或 Chrome 浏览器打开，系统自带浏览器可能存在 Web Bluetooth 兼容问题。
 
+## 社区分支
+
+- iOS 16 适配版：<https://github.com/XiePolice/BaiyunKeys-iOS16> · by [@XiePolice](https://github.com/XiePolice)
+- Android 复刻版：<https://github.com/XaviorShen/BaiyunKeys-Android> · by [@XaviorShen](https://github.com/XaviorShen)
+
 ## 安装
 
 **系统要求：iOS 17 及以上。** 低于此版本会启动闪退（工程用了大量 iOS 17 才有的 API，系统找不到符号）。iPhone 8 及以后机型都能升到 iOS 17 / 18。
