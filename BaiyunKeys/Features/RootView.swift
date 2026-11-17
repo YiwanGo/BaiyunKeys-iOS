@@ -228,6 +228,10 @@ struct RootView: View {
     }
 
     // MARK: - 隐藏入口
+    //
+    // 注：如果你 fork 本项目并计划开源，请不要在 README 里直接说明
+    // 这里的开启流程（连点次数、访问码等）。默认隐藏的本意就是不把
+    // 钥匙摆在门口。对想了解的人，源码本身已经说明了一切。
 
     private func registerConfigTap() {
         let now = Date()
